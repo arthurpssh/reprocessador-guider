@@ -1,0 +1,49 @@
+# Dependências
+node_modules/
+.pnp
+.pnp.js
+
+# Variáveis de ambiente (CRÍTICO PARA SEGURANÇA) — apenas o exemplo é versionado
+.env
+.env.*
+!.env.example
+
+# Chaves e credenciais (Google APIs e outros)
+credentials.json
+client_secret.json
+token.json
+*-key.json
+service-account.json
+gcp-*.json
+firebase-*.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Builds
+dist/
+build/
+out/
+
+# Caches
+.npm
+.eslintcache
+
+# Sistema operacional
+.DS_Store
+._*
+Thumbs.db
+
+# Editores e IDEs
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+*.bak
+
+# Pacote para o Magic Deploy
+*.zip

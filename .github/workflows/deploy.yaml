@@ -1,0 +1,115 @@
+name: deploy
+
+concurrency: ${{ github.ref_name }}
+
+on:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+jobs:
+  resolve:
+    runs-on: sandbox
+    outputs:
+      url: ${{ steps.url.outputs.host }}
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Install yq v4
+        run: |
+          YQ_VERSION="v4.52.4"
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Get deploy URL
+        id: url
+        run: echo "host=$(yq '.lb.hosts[0].host' values.yml)" >> $GITHUB_OUTPUT
+
+  build:
+    runs-on: sandbox
+    env:
+      AWS_DEFAULT_REGION: us-east-1
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Configure Artifactory
+        uses: Hotmart-Org/actions/codeartifact@master
+        with:
+          npmrc: "${{ secrets.NPM_RC }}"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Get commit SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=7 HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Docker Build
+        uses: Hotmart-Org/actions/docker@master
+        with:
+          file: values.yml
+          dockerfile: ./Dockerfile
+          tag: ${{ steps.sha.outputs.short }}
+          create-ecr: true
+
+  infra:
+    uses: Hotmart-Org/actions/.github/workflows/base.yaml@master
+    secrets: inherit
+    needs: [build]
+    with:
+      environment: staging
+      file: values.yml
+      namespace: magic-deploy
+      cluster: production
+      runs-on: sandbox
+
+  deploy:
+    runs-on: sandbox
+    needs: [build, infra, resolve]
+    environment:
+      name: ${{ github.ref_name }}
+      url: https://${{ needs.resolve.outputs.url }}
+    env:
+      AWS_DEFAULT_REGION: us-east-1
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+
+      - name: Setup credentials
+        uses: Hotmart-Org/actions/setup-credentials@master
+        with:
+          target-role: github-actions-runner-helm-role
+          target-profile: target
+          account-id: "071292884972"
+
+      - name: Sync secrets
+        env:
+          ALL_SECRETS: ${{ toJSON(secrets) }}
+          GH_TOKEN: ${{ secrets.MAGIC_DEPLOY_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          AWS_PROFILE: target
+        run: |
+          gh api repos/${{ github.repository }}/contents/scripts/sync-secrets.sh?ref=main \
+            --jq '.content' | base64 -d > /tmp/sync-secrets.sh
+          bash /tmp/sync-secrets.sh "${{ github.ref_name }}" magic-deploy
+
+      - name: Deploy
+        uses: Hotmart-Org/actions/helm@master
+        with:
+          file: values.yml
+          environment: staging
+          namespace: magic-deploy
+          timeout: 300
+          cluster: production
+          account-id: "071292884972"
+          show-logs: true

@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reprocessador Guider</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1c2430; --muted:#667085; --line:#e4e7ec;
+          --ok:#12805c; --err:#c0362c; --warn:#b26a00; --run:#1d4ed8; --primary:#1c2430; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#101419; --card:#181e26; --text:#e8ecf1; --muted:#98a2b3; --line:#2a3340;
+            --ok:#3ccf91; --err:#ff7a70; --warn:#f5b04c; --run:#7aa2ff; --primary:#e8ecf1; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:720px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:20px; margin:0 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:16px; }
+  .top { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .badge { display:inline-block; padding:3px 12px; border-radius:999px; font-weight:600; font-size:13px; border:1px solid currentColor; }
+  .RODANDO { color:var(--run); } .PAUSADO { color:var(--warn); } .PARADO { color:var(--muted); } .CONCLUIDO { color:var(--ok); }
+  .bar { height:14px; background:var(--line); border-radius:999px; overflow:hidden; margin:16px 0 6px; }
+  .bar > div { height:100%; background:var(--ok); width:0; transition:width .4s; }
+  .pct { display:flex; justify-content:space-between; color:var(--muted); font-size:13px; }
+  .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:16px; }
+  @media (max-width:560px) { .grid { grid-template-columns:repeat(2,1fr); } }
+  .stat b { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+  .stat span { color:var(--muted); font-size:13px; }
+  .ok b { color:var(--ok); } .err b { color:var(--err); }
+  .meta { color:var(--muted); font-size:13px; margin-top:16px; display:grid; gap:2px; }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; }
+  button { font:inherit; font-weight:600; padding:9px 18px; border-radius:8px; border:1px solid var(--line);
+           background:var(--card); color:var(--text); cursor:pointer; }
+  button.primary { background:var(--primary); color:var(--bg); border-color:var(--primary); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .msg { margin-top:12px; font-size:14px; }
+  .error { color:var(--err); font-size:13px; min-height:18px; margin-top:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Reprocessador Guider</h1>
+
+  <div class="card">
+    <div class="top">
+      <span id="badge" class="badge PARADO">Carregando…</span>
+      <div class="actions">
+        <button id="start" class="primary" disabled>Iniciar</button>
+        <button id="pause" disabled>Pausar</button>
+        <button id="retry" disabled>Reprocessar erros</button>
+      </div>
+    </div>
+
+    <div class="bar"><div id="fill"></div></div>
+    <div class="pct"><span id="pct">0%</span><span id="done">0 / 0</span></div>
+
+    <div class="grid">
+      <div class="stat ok"><b id="sucesso">–</b><span>Sucesso</span></div>
+      <div class="stat err"><b id="erro">–</b><span>Erro</span></div>
+      <div class="stat"><b id="pendentes">–</b><span>Pendentes</span></div>
+      <div class="stat"><b id="duplicado">–</b><span>Duplicados</span></div>
+    </div>
+
+    <div class="meta">
+      <div>Previsão de término: <span id="eta">–</span></div>
+      <div>Último ticket: <span id="ultimo">–</span></div>
+      <div>Sinal de vida do worker: <span id="hb">–</span></div>
+      <div>Intervalo entre chamadas: <span id="intervalo">–</span></div>
+      <div>Você: <span id="me">–</span></div>
+    </div>
+    <div class="msg" id="msg"></div>
+    <div class="error" id="err"></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const LABEL = { RODANDO: 'Rodando', PAUSADO: 'Pausado', PARADO: 'Parado', CONCLUIDO: 'Concluído' };
+
+async function call(path, method = 'GET') {
+  const r = await fetch(path, { method });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+
+function fmtDur(sec) {
+  if (sec == null) return '–';
+  if (sec < 60) return sec + 's';
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h}h ${m}min` : `${m}min`;
+}
+
+function render(s) {
+  const c = s.counts;
+  const processed = c.sucesso + c.erro + c.duplicado;
+  const pct = c.total ? (processed / c.total) * 100 : 0;
+
+  let label = LABEL[s.estado] || s.estado;
+  if (s.estado === 'RODANDO' && !s.workerAtivo) label = 'Rodando (aguardando worker)';
+  $('badge').textContent = label;
+  $('badge').className = 'badge ' + s.estado;
+
+  $('fill').style.width = pct.toFixed(1) + '%';
+  $('pct').textContent = pct.toFixed(1) + '%';
+  $('done').textContent = `${processed} / ${c.total}`;
+  $('sucesso').textContent = c.sucesso;
+  $('erro').textContent = c.erro;
+  $('pendentes').textContent = c.pendentes;
+  $('duplicado').textContent = c.duplicado;
+
+  $('eta').textContent = s.estado === 'RODANDO' ? fmtDur(s.etaSegundos) : '–';
+  $('ultimo').textContent = s.ultimoTicket || '–';
+  $('hb').textContent = s.heartbeatSegundos == null ? '–' : `há ${fmtDur(s.heartbeatSegundos)}`;
+  $('intervalo').textContent = s.intervaloMs ? s.intervaloMs + ' ms' : '–';
+  $('msg').textContent = s.mensagem || '';
+
+  const running = s.estado === 'RODANDO';
+  $('start').textContent = s.estado === 'PAUSADO' ? 'Retomar' : 'Iniciar';
+  $('start').disabled = !canOperate || running || c.pendentes === 0;
+  $('pause').disabled = !canOperate || !running;
+  $('retry').disabled = !canOperate || running || c.erro === 0;
+}
+
+async function refresh() {
+  try {
+    render(await call('/api/status'));
+    $('err').textContent = '';
+  } catch (e) {
+    $('err').textContent = 'Falha ao atualizar: ' + e.message;
+  }
+}
+
+async function act(path, confirmMsg) {
+  if (confirmMsg && !confirm(confirmMsg)) return;
+  try {
+    await call(path, 'POST');
+    await refresh();
+  } catch (e) {
+    $('err').textContent = e.message;
+  }
+}
+
+$('start').onclick = () => act('/api/start', 'Iniciar o fechamento dos tickets pendentes? Isso dispara chamadas reais ao Guider.');
+$('pause').onclick = () => act('/api/pause');
+$('retry').onclick = () => act('/api/retry-errors', 'Limpar o status dos tickets com erro para que sejam processados de novo?');
+
+let canOperate = false;
+(async () => {
+  try {
+    const me = await call('/api/me');
+    canOperate = me.perfil === 'operador';
+    $('me').textContent = `${me.email} (${canOperate ? 'operador' : 'somente leitura'})`;
+  } catch (e) {
+    $('me').textContent = '–';
+  }
+  refresh();
+  setInterval(refresh, 5000);
+})();
+</script>
+</body>
+</html>

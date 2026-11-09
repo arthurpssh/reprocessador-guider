@@ -1,0 +1,49 @@
+name: reprocessador-guider
+
+containerPort: 3001
+cpu: 0.25
+memory: 512Mi
+
+# O worker mantém lock e estado de execução em memória: manter 1 réplica
+replicaCount: 1
+
+healthCheckPath: /api/health
+periodSeconds: 30
+timeoutSeconds: 5
+successThreshold: 2
+failureThreshold: 5
+
+env:
+  PROFILE: staging
+  PORT: "3001"
+  NEW_RELIC_ENABLED: "false"
+  GUIDER_TOKEN:
+    secretKeyRef:
+      name: reprocessador-guider-guider-token
+      key: GUIDER_TOKEN
+  SPREADSHEET_ID:
+    secretKeyRef:
+      name: reprocessador-guider-spreadsheet-id
+      key: SPREADSHEET_ID
+  GOOGLE_SERVICE_ACCOUNT_EMAIL:
+    secretKeyRef:
+      name: reprocessador-guider-google-service-account-email
+      key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+  GOOGLE_PRIVATE_KEY:
+    secretKeyRef:
+      name: reprocessador-guider-google-private-key
+      key: GOOGLE_PRIVATE_KEY
+
+lb:
+  type: internal
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: "https://auth.hotmart.run/verify"
+    nginx.ingress.kubernetes.io/auth-signin: "https://auth.hotmart.run/login?rd=https://$host$request_uri"
+    nginx.ingress.kubernetes.io/auth-response-headers: "X-Auth-Request-Email,X-Auth-Request-User"
+  hosts:
+  - host: reprocessador-guider.hotmart.run
+    paths: ["/"]
+
+imports:
+- to: module.base-module.aws_ecr_repository.application-default-ecr[0]
+  id: "reprocessador-guider"
